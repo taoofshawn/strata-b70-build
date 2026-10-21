@@ -1,0 +1,78 @@
+name: Build Strata Windows SYCL engine
+
+# Builds the Strata Intel SYCL engine natively on Windows (PR Niko1221#2079,
+# branch windows-intel-native of lm902/Strata) on GitHub's windows-latest
+# runner (VS 2022 C++ workload preinstalled). Intel oneAPI DPC++ + oneMKL are
+# installed per-user by Intel's official oneapi-ci method (webimage
+# bootstrapper, silent, no interactive UAC). Only the `strata` engine target
+# is built - not the 157-target parity suite - to fit runner disk/time.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build-strata.yml']
+
+env:
+  STRATA_REF: windows-intel-native
+  STRATA_REPO: lm902/Strata
+  ONEAPI_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/4144bec3-82ce-4672-bd71-5c93a79cd5e7/intel-oneapi-toolkit-2026.1.0.191_offline.exe
+  ONEAPI_COMPONENTS: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.tbb.devel
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Checkout Strata PR branch
+        run: |
+          git clone --depth 1 --branch %STRATA_REF% https://github.com/%STRATA_REPO%.git strata
+          git -C strata rev-parse HEAD > strata-commit.txt
+
+      - name: Install oneAPI (DPC++, oneMKL, TBB) silently
+        shell: cmd
+        run: |
+          curl.exe --output %TEMP%\webimage.exe --url %ONEAPI_URL% --retry 5 --retry-delay 5
+          cd /d %TEMP%
+          webimage.exe -s -x -f webimage_extracted --log extract.log
+          webimage_extracted\bootstrapper.exe -s --action install --components=%ONEAPI_COMPONENTS% --eula=accept -p=NEED_VS2017_INTEGRATION=0 -p=NEED_VS2019_INTEGRATION=0 -p=NEED_VS2022_INTEGRATION=0 --log-dir=.
+          rd /s/q webimage_extracted
+
+      - name: Build strata engine
+        shell: cmd
+        run: |
+          type strata-commit.txt
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
+          cd strata
+          sycl\tools\build_windows.bat --target strata
+
+      - name: Stage artifact (engine + runtime DLLs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $stage = "$PWD\stage\strata-win-sycl"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item strata\build-sycl-win\strata.exe $stage\
+          $lib = "C:\Program Files (x86)\Intel\oneAPI"
+          # collect runtime DLLs from the oneAPI install (names vary by version)
+          $patterns = @('sycl*.dll','ur_*.dll','mkl_*.dll','mkl_rt*.dll','tbb12.dll','libhwloc-15.dll','libiomp5md.dll','libmmd.dll','svml_dispmd.dll','libomp.dll','tcm.dll','dnnl*.dll')
+          $dirs = @("$lib\compiler\latest\bin","$lib\compiler\*\bin","$lib\mkl\latest\bin","$lib\mkl\*\bin","$lib\tbb\latest\bin","$lib\tbb\*\bin","$lib\redist\*")
+          foreach ($d in $dirs) {
+            foreach ($p in $patterns) {
+              Get-ChildItem -Path $d -Filter $p -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName $stage\ -Force }
+            }
+          }
+          Get-ChildItem -Recurse -Path "$lib" -Include *.spv -ErrorAction SilentlyContinue | Copy-Item -Destination $stage\ -ErrorAction SilentlyContinue
+          Write-Host "--- staged files ---"
+          Get-ChildItem $stage | Select-Object Name, Length | Format-Table | Out-String
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: strata-win-sycl
+          path: stage/strata-win-sycl/
+          retention-days: 7
+          if-no-files-found: error
