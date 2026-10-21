@@ -48,7 +48,7 @@ jobs:
           type strata-commit.txt
           call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 vs2022
           cd strata
-          sycl\tools\build_windows.bat --target strata
+          sycl\tools\build_windows.bat
 
       - name: Stage artifact (engine + runtime DLLs)
         shell: pwsh
