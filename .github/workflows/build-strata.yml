@@ -28,6 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Checkout Strata PR branch
+        shell: cmd
         run: |
           git clone --depth 1 --branch %STRATA_REF% https://github.com/%STRATA_REPO%.git strata
           git -C strata rev-parse HEAD > strata-commit.txt
